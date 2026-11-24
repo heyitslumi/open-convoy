@@ -59,5 +59,4 @@ exclusive access to the Steam GameServer interface.
 Not affiliated with or endorsed by SCS Software or Valve. Protocol details were
 derived from observing network traffic for interoperability.
 
-No license file is present yet; the code is not licensed for reuse until one is
-added.
+Released under the MIT License; see `LICENSE`.
