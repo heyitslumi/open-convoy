@@ -260,10 +260,7 @@ impl ConvoyServer {
                 // The stock client answers the mod request with this subtype;
                 // its layout is not decoded yet, so log it verbatim.
                 Some(0x0a) => {
-                    log::info!(
-                        "client {client_id}: inbound 0x0a frame {}",
-                        hex(bytes.as_slice())
-                    );
+                    log::info!("client {client_id}: inbound 0x0a frame {}", hex(bytes.as_slice()));
                     self.sessions.get_mut(&conn).expect("session exists").state =
                         ClientState::Handshake;
                     Ok(vec![mod_list_ack(client_id)])
@@ -434,6 +431,7 @@ impl ConvoyServer {
 
                     for msg in steam.sockets().poll_incoming() {
                         if queries.contains(&msg.conn) { continue; }
+                        log::info!("inbound {} | {}", msg.conn, hex(&msg.payload));
                         if !self.sessions.contains_key(&msg.conn) {
                             steam.sockets().set_connection_poll_group(msg.conn);
                             let challenge = self.handle_connection(msg.conn);
