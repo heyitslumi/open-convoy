@@ -562,17 +562,16 @@ fn mod_check_ack(client_id: u16) -> Vec<u8> {
     out
 }
 
-/// Stock no-mod acknowledgement (42 bytes), captured from the official server.
+/// Reply to the client's 18-byte mod-list frame, as the official server sends it.
+///
+/// `00 00 01 <cid> 00 00 <cid> 0d 00*8`
 fn mod_list_ack(client_id: u16) -> Vec<u8> {
-    const OPAQUE: [u8; 32] = [
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x33, 0x23, 0xff, 0xff, 0x0f, 0x7b,
-        0xfe, 0xff, 0x05, 0x18, 0xe8, 0xf7, 0x33, 0x23, 0xff, 0xff, 0x0f, 0x7b, 0xfe, 0xff,
-        0x05, 0x18, 0xe8, 0xf7,
-    ];
-    let mut out = vec![0x00, 0x00, 0x01, 0x01, 0x00, 0x00, 0x00];
+    let mut out = vec![0x00, 0x00, 0x01];
     out.extend_from_slice(&client_id.to_le_bytes());
-    out.push(0x04);
-    out.extend_from_slice(&OPAQUE);
+    out.extend_from_slice(&[0x00, 0x00]);
+    out.extend_from_slice(&client_id.to_le_bytes());
+    out.push(0x0d);
+    out.extend_from_slice(&[0u8; 8]);
     out
 }
 
