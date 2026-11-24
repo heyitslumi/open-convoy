@@ -1,0 +1,44 @@
+# OpenConvoy Server Configuration Example
+# Place this file as config.toml or pass path to server binary.
+
+[server]
+# Name of server shown in the Convoy session browser
+name = "OpenConvoy"
+
+# Password required to join (empty string for public session)
+password = ""
+
+# Maximum concurrent player slots (default: 8)
+max_players = 8
+
+# Steam Game Server Logon Token (GSLT) for persistent server identity and moderator authority
+# Obtain token for AppID 227300 at https://steamcommunity.com/dev/managegameservers
+server_logon_token = ""
+
+# SteamID64 of authorized administrators/moderators allowed to execute slash commands
+# Example: moderators = [76561198000000001, 76561198000000002]
+moderators = []
+
+# Path to persistent banlist file (format: steam_id; username; end_unix_timestamp; reason)
+# Default: banlist.txt in current directory or homedir
+banlist_path = "banlist.txt"
+
+[network]
+# Main incoming connection port for SteamNetworkingSockets
+port = 27015
+
+# Query port for Steam server browser
+query_port = 27016
+
+# Virtual port used for P2P listen sockets
+virtual_port = 100
+
+[compatibility]
+# Euro Truck Simulator 2 game version string
+game_version = "1.62s"
+
+# Map name matching server_packages
+map_name = "/map/europe.mbd"
+
+# Map bounding box dimensions: [min_x, min_y, max_x, max_y]
+map_dimensions = [-24576000, -31744000, 20480000, 22528000]

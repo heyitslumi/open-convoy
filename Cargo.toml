@@ -1,0 +1,7 @@
+[workspace]
+members = [
+    "crates/convoy-proto",
+    "crates/convoy-steam",
+    "crates/convoy-server",
+]
+resolver = "2"
