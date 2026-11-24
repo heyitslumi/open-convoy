@@ -244,16 +244,8 @@ impl ConvoyServer {
                 let session = self.sessions.get_mut(&conn).expect("session exists");
                 session.steam_id = Some(steam_id);
                 session.state = ClientState::Authenticating;
-                log::info!("client {client_id}: auth session started; requesting mod verification");
-                let mut request = vec![0, 0, 1];
-                request.extend_from_slice(&client_id.to_le_bytes());
-                request.extend_from_slice(&[0, 0]);
-                request.extend_from_slice(&client_id.to_le_bytes());
-                request.push(1);
-                request.extend_from_slice(&75u64.to_le_bytes());
-                // Observed on the stock ETS2 no-mod baseline; meaning is unverified.
-                request.extend_from_slice(&[0xcd, 0x61, 0xc4, 0xc5, 0xb4, 0xfd, 0x5b, 0xc7]);
-                Ok(vec![request])
+                log::info!("client {client_id}: auth session started");
+                Ok(Vec::new())
             }
 
             // Step 3: mod verification -> ack -> Handshake.
@@ -414,8 +406,14 @@ impl ConvoyServer {
                                     continue;
                                 }
                                 let challenge = self.handle_connection(conn);
-                                if let Err(e) = send(steam.sockets(), conn, &challenge, true) {
-                                    log::warn!("failed to send challenge to {conn}: {e}");
+                                let client_id = self.session(conn).map_or(0, |s| s.client_id);
+                                let opening = std::iter::once(challenge)
+                                    .chain(setup_frames())
+                                    .chain(std::iter::once(mod_request(client_id)));
+                                for packet in opening {
+                                    if let Err(e) = send(steam.sockets(), conn, &packet, true) {
+                                        log::warn!("failed to send opening packet to {conn}: {e}");
+                                    }
                                 }
                             }
                             convoy_steam::sockets::ConnectionEvent::Connected(conn) if queries.contains(&conn) => {
@@ -517,11 +515,45 @@ fn session_listing(config: &ServerConfig, steam_id: u64) -> Vec<u8> {
 
 /// Step 1 packet: `0x0b` with the assigned id and an empty ticket body.
 fn challenge(client_id: u16) -> Vec<u8> {
-    AuthTicketMsg {
+    let mut out = AuthTicketMsg {
         client_id,
         ticket: Vec::new(),
     }
-    .encode()
+    .encode();
+    // The official server writes `01 00` here; the encoder emits `00 00`.
+    out[5] = 0x01;
+    out
+}
+
+/// The three opaque setup frames the official server sends on connect.
+fn setup_frames() -> [Vec<u8>; 3] {
+    [
+        [&[0x00, 0x00, 0x0c, 0xf7, 0xff, 0x01, 0x00, 0x02][..], &[0xbb, 0xbf, 0xdf, 0x76, 0, 0, 0, 0]].concat(),
+        [&[0x00, 0x00, 0x07, 0xf7, 0xff, 0x01, 0x00, 0x02][..], &[0x50, 0x6c, 0x2f, 0x00, 0, 0, 0, 0]].concat(),
+        [&[0x00, 0x00, 0x07, 0xf7, 0xff, 0x01, 0x00, 0x03][..], &[0x00, 0xd4, 0xa0, 0x64, 0x08, 0, 0, 0]].concat(),
+    ]
+}
+
+/// Mod request sent with the challenge, matching the official server's order.
+///
+/// `00 00 01 <cid> 00 00 <cid> 01 4b 00*7 <8-byte session token>`
+fn mod_request(client_id: u16) -> Vec<u8> {
+    let mut out = vec![0x00, 0x00, 0x01];
+    out.extend_from_slice(&client_id.to_le_bytes());
+    out.extend_from_slice(&[0x00, 0x00]);
+    out.extend_from_slice(&client_id.to_le_bytes());
+    out.push(0x01);
+    out.extend_from_slice(&75u64.to_le_bytes());
+    // Opaque per-session token: the official server sends a different value each run.
+    out.extend_from_slice(&session_token());
+    out
+}
+
+fn session_token() -> [u8; 8] {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos() as u64);
+    (nanos ^ (std::process::id() as u64) << 32).to_le_bytes()
 }
 
 /// Step 3 reply: `00 00 01 01 00 00 00 <cid> 00 04`.
@@ -587,4 +619,18 @@ pub enum ServerError {
     Banned(String),
     #[error("socket error: {0}")]
     Socket(String),
+}
+
+#[cfg(test)]
+mod opening_tests {
+    use super::*;
+
+    #[test]
+    fn mod_request_matches_the_official_layout() {
+        let frame = mod_request(10);
+        assert_eq!(frame.len(), 26);
+        assert_eq!(&frame[..11], &[0, 0, 1, 10, 0, 0, 0, 10, 0, 1, 75]);
+        assert_eq!(&frame[11..18], &[0; 7]);
+        assert_ne!(&frame[18..], &[0; 8]);
+    }
 }

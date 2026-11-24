@@ -64,7 +64,8 @@ impl AuthTicketMsg {
 
     pub fn decode(b: &[u8]) -> Result<Self, ProtoError> {
         expect(b, 0, &[0x00, 0x00, 0x0b])?;
-        expect(b, 5, &[0x00, 0x00])?;
+        // Bytes 5..7 differ by direction (`01 00` server->client, `00 00` back)
+        // and carry no information we use.
         let ticket = b.get(Self::HEADER_LEN..).ok_or_else(malformed)?;
         Ok(Self {
             client_id: u16_at(b, 3)?,

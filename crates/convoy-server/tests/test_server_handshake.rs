@@ -53,8 +53,7 @@ fn handshake_walks_connecting_authenticating_handshake_active() {
         ticket: vec![0xde, 0xad, 0xbe, 0xef],
     }
     .encode();
-    assert_eq!(srv.handle_packet(conn, &ticket).unwrap(),
-        vec![hex("0000010a0000000a00014b00000000000000cd61c4c5b4fd5bc7")]);
+    assert!(srv.handle_packet(conn, &ticket).unwrap().is_empty());
     let session = srv.session(conn).unwrap();
     assert_eq!(session.state, ClientState::Authenticating);
     assert_eq!(session.steam_id, Some(STEAM_ID));
