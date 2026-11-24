@@ -93,13 +93,22 @@ So the reply must be >=26 bytes and carry the right 8-byte token at offset 18.
 An 18-byte reply is too short; that is why the official-looking 18-byte ack
 never satisfied it.
 
-### Variants tried for the >=26 byte reply
+### Variants tried (all with a real client)
 
-| Token at 18..26 | Result |
-|---|---|
-| `3323ffff0f7bfeff` (official capture) | suspicious message |
-| zeros (mirror of the client's own frame) | suspicious message |
-| `0f37f6f6eae0a670` (advertised mod-dir hash) | suspicious message |
+| Opening frames | Reply to the `0x0a` frame | Result |
+|---|---|---|
+| directed `f7ff0100 02` | 10-byte ack | suspicious `type 30` |
+| directed | 42-byte, official token | suspicious `type 30` |
+| directed | 18-byte `…0d` ack | suspicious `type 30` |
+| broadcast `f7ff ffff 02` | 42-byte, client's token echoed | **no warning**, silent close |
+| broadcast | 18-byte `…0d` ack | two `type 1` warnings from 65535, then `type 30` |
+| broadcast | 42-byte + extra `0x01/06` frame | `type 1` |
+| none | 42-byte, client's token echoed | suspicious `type 30` |
+
+Best observed state: broadcast setup frames plus the 42-byte ack with the
+client's own token echoed at 18 and 30. The client accepts every message and
+then closes the connection without a warning, so the next unknown is what it
+waits for after the mod exchange rather than what it rejects.
 
 The hook also crashed the client twice while reading the compared values, so
 that instrumentation needs a fault guard before it is used again.

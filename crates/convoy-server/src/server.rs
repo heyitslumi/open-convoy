@@ -263,9 +263,12 @@ impl ConvoyServer {
                     log::info!("client {client_id}: inbound 0x0a frame {}", hex(bytes.as_slice()));
                     self.sessions.get_mut(&conn).expect("session exists").state =
                         ClientState::Handshake;
-                    // The value the client validates against is the mod-dir hash
-                    // advertised in the session listing and in SetModDir.
-                    Ok(vec![mod_list_ack(client_id, 0x70a6e0eaf6f6370fu64.to_le_bytes())])
+                    // Echo the client's own 8-byte token back in the ack.
+                    let token: [u8; 8] = bytes
+                        .get(10..18)
+                        .and_then(|t| t.try_into().ok())
+                        .unwrap_or([0; 8]);
+                    Ok(vec![mod_list_ack(client_id, token)])
                 }
                 other => Err(ServerError::UnexpectedSubtype {
                     got: other.copied(),
@@ -407,7 +410,7 @@ impl ConvoyServer {
                                 let challenge = self.handle_connection(conn);
                                 let client_id = self.session(conn).map_or(0, |s| s.client_id);
                                 let opening = std::iter::once(challenge)
-                                    .chain(setup_frames())
+                                    .chain(setup_frames(client_id))
                                     .chain(std::iter::once(mod_request(client_id)));
                                 for packet in opening {
                                     if let Err(e) = send(steam.sockets(), conn, &packet, true) {
@@ -526,12 +529,16 @@ fn challenge(client_id: u16) -> Vec<u8> {
 }
 
 /// The three opaque setup frames the official server sends on connect.
-fn setup_frames() -> [Vec<u8>; 3] {
-    [
-        [&[0x00, 0x00, 0x0c, 0xf7, 0xff, 0x01, 0x00, 0x02][..], &[0xbb, 0xbf, 0xdf, 0x76, 0, 0, 0, 0]].concat(),
-        [&[0x00, 0x00, 0x07, 0xf7, 0xff, 0x01, 0x00, 0x02][..], &[0x50, 0x6c, 0x2f, 0x00, 0, 0, 0, 0]].concat(),
-        [&[0x00, 0x00, 0x07, 0xf7, 0xff, 0x01, 0x00, 0x03][..], &[0x00, 0xd4, 0xa0, 0x64, 0x08, 0, 0, 0]].concat(),
-    ]
+#[allow(unused_variables)]
+fn setup_frames(client_id: u16) -> Vec<Vec<u8>> {
+    // Broadcast form observed when a real client connects; the probe saw a
+    // directed variant (f7 ff 01 00 02) instead.
+    let frames = vec![
+        [&[0x00, 0x00, 0x0c, 0xf7, 0xff, 0xff, 0xff, 0x02][..], &[0xa1, 0xfa, 0xcb, 0xf4, 0, 0, 0, 0]].concat(),
+        [&[0x00, 0x00, 0x07, 0xf7, 0xff, 0xff, 0xff, 0x02][..], &[0x50, 0x6c, 0x2f, 0x00, 0, 0, 0, 0]].concat(),
+        [&[0x00, 0x00, 0x07, 0xf7, 0xff, 0xff, 0xff, 0x03][..], &[0x00, 0xd4, 0xa0, 0x64, 0x08, 0, 0, 0]].concat(),
+    ];
+    frames
 }
 
 /// Mod request sent with the challenge, matching the official server's order.
@@ -564,11 +571,8 @@ fn mod_check_ack(client_id: u16) -> Vec<u8> {
     out
 }
 
-/// Reply to the client's mod-list frame.
-///
-/// The official server answers with the client's own 8-byte token echoed at
-/// offset 18 and 30: `00 00 01 01 00 00 00 <cid> 00 04` + 8 zeros + two
-/// `token + 0518e8f7` blocks.
+/// Reply to the client's mod-list frame: the client's own 8-byte token echoed
+/// at offsets 18 and 30, as the official server does with its mod hash.
 fn mod_list_ack(client_id: u16, token: [u8; 8]) -> Vec<u8> {
     let mut out = vec![0x00, 0x00, 0x01, 0x01, 0x00, 0x00, 0x00];
     out.extend_from_slice(&client_id.to_le_bytes());
