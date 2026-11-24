@@ -1,6 +1,7 @@
 use convoy_steam::gameserver::SteamServer;
 
 #[test]
+#[ignore = "needs a running Steam client and exclusive Steam GameServer access"]
 fn test_steam_server_init_and_drop() {
     std::env::set_var("SteamAppId", "227300");
 

@@ -6,8 +6,7 @@ use libloading::{Library, Symbol};
 use crate::sockets::SteamSockets;
 use crate::SteamError;
 
-pub const DEFAULT_STEAM_API_PATH: &str =
-    "/home/lumi/ets2-dedicated/bin/linux_x64/libsteam_api.so";
+pub const DEFAULT_STEAM_API_PATH: &str = "libsteam_api.so";
 
 type FnGameServerInit = unsafe extern "C" fn(
     un_ip: u32,
