@@ -209,5 +209,9 @@ fn stock_0x0a_reply_is_answered_with_the_captured_no_mod_ack() {
     let stock = hex("0000010a0000000a000a00000000b4fd5bc7cd61c4c5");
     let out = srv.handle_packet(1, &stock).unwrap();
     assert_eq!(srv.session(1).unwrap().state, ClientState::Handshake);
-    assert_eq!(out, vec![hex("0000010a0000000a000d0000000000000000")]);
+    // The client's own 8-byte token is echoed at 18 and 30 in a 42-byte reply.
+    let token = 0x70a6e0eaf6f6370fu64.to_le_bytes();
+    assert_eq!(out[0].len(), 42);
+    assert_eq!(&out[0][18..26], &token);
+    assert_eq!(&out[0][30..38], &token);
 }

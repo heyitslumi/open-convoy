@@ -72,6 +72,38 @@ almost certainly wrong.
 The complaint appears in all three, so it is not caused by the reply, and the
 setup frames are not required to reach the mod step.
 
+## Gate located in the client binary (2026-11-24)
+
+`[MP] Warning: Client - suspicious message from %hu - type %u - %u.` lives at
+`0x2baa6a0`; its reporter is at `0x1f835c0`. An `LD_PRELOAD` hook that patches
+that function (source kept outside the repo) showed the failing call site:
+
+```
+0x1f881fd  (check at 0x1f881cb)
+```
+
+Which decodes as:
+
+- `1e3d880(buf, 0x12, 8)` returns true only when `buf.len - 8 >= 18`, i.e. the
+  buffered server reply must be **at least 26 bytes**.
+- the client then compares `buf[18..26]` with a value it computed earlier
+  (`rbp-0x1c0`, filled from the "server2client" channel).
+
+So the reply must be >=26 bytes and carry the right 8-byte token at offset 18.
+An 18-byte reply is too short; that is why the official-looking 18-byte ack
+never satisfied it.
+
+### Variants tried for the >=26 byte reply
+
+| Token at 18..26 | Result |
+|---|---|
+| `3323ffff0f7bfeff` (official capture) | suspicious message |
+| zeros (mirror of the client's own frame) | suspicious message |
+| `0f37f6f6eae0a670` (advertised mod-dir hash) | suspicious message |
+
+The hook also crashed the client twice while reading the compared values, so
+that instrumentation needs a fault guard before it is used again.
+
 ## Next steps
 
 1. Determine what "type 30" refers to in the client. The message appears even
@@ -84,4 +116,8 @@ setup frames are not required to reach the mod step.
    hash.
 3. Capture a real client joining the official server with the interposer in
    `LD_PRELOAD` mode and align both directions frame by frame, instead of
-   comparing probes.
+   comparing probes. The official real-client capture shows the client sending
+   a 128-byte subtype-`0x02` mod list carrying `3323ffff0f7bfeff` at 18..26,
+   while the client replies to Rust with an 18-byte subtype-`0x0a` frame full of
+   zeros. Fixing that divergence is the likely root cause: the client never
+   reaches its normal mod-list state against Rust.

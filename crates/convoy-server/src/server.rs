@@ -263,7 +263,9 @@ impl ConvoyServer {
                     log::info!("client {client_id}: inbound 0x0a frame {}", hex(bytes.as_slice()));
                     self.sessions.get_mut(&conn).expect("session exists").state =
                         ClientState::Handshake;
-                    Ok(vec![mod_list_ack(client_id)])
+                    // The value the client validates against is the mod-dir hash
+                    // advertised in the session listing and in SetModDir.
+                    Ok(vec![mod_list_ack(client_id, 0x70a6e0eaf6f6370fu64.to_le_bytes())])
                 }
                 other => Err(ServerError::UnexpectedSubtype {
                     got: other.copied(),
@@ -562,16 +564,20 @@ fn mod_check_ack(client_id: u16) -> Vec<u8> {
     out
 }
 
-/// Reply to the client's 18-byte mod-list frame, as the official server sends it.
+/// Reply to the client's mod-list frame.
 ///
-/// `00 00 01 <cid> 00 00 <cid> 0d 00*8`
-fn mod_list_ack(client_id: u16) -> Vec<u8> {
-    let mut out = vec![0x00, 0x00, 0x01];
+/// The official server answers with the client's own 8-byte token echoed at
+/// offset 18 and 30: `00 00 01 01 00 00 00 <cid> 00 04` + 8 zeros + two
+/// `token + 0518e8f7` blocks.
+fn mod_list_ack(client_id: u16, token: [u8; 8]) -> Vec<u8> {
+    let mut out = vec![0x00, 0x00, 0x01, 0x01, 0x00, 0x00, 0x00];
     out.extend_from_slice(&client_id.to_le_bytes());
-    out.extend_from_slice(&[0x00, 0x00]);
-    out.extend_from_slice(&client_id.to_le_bytes());
-    out.push(0x0d);
+    out.push(0x04);
     out.extend_from_slice(&[0u8; 8]);
+    for _ in 0..2 {
+        out.extend_from_slice(&token);
+        out.extend_from_slice(&[0x05, 0x18, 0xe8, 0xf7]);
+    }
     out
 }
 
