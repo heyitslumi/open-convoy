@@ -123,9 +123,12 @@ that instrumentation needs a fault guard before it is used again.
    Both vary per run while the mod set stays empty, so they are probably keyed
    by something the server holds (session or server SteamID) rather than a mod
    hash.
-3. Capture a real client joining the official server with the interposer in
-   `LD_PRELOAD` mode and align both directions frame by frame, instead of
-   comparing probes. The official real-client capture shows the client sending
+3. Capture a real client joining the official server with
+   `tools/netcap-client.c` in `LD_PRELOAD` mode and align both directions frame
+   by frame, instead of comparing probes. That interposer hooks `SteamAPI_Init`
+   (the dedicated-server variant hooks `SteamInternal_GameServer_Init`, which
+   the game never calls) and patches the client's `ISteamNetworkingSockets`
+   vtable. It compiles but has not been run against the game yet. The official real-client capture shows the client sending
    a 128-byte subtype-`0x02` mod list carrying `3323ffff0f7bfeff` at 18..26,
    while the client replies to Rust with an 18-byte subtype-`0x0a` frame full of
    zeros. Fixing that divergence is the likely root cause: the client never
