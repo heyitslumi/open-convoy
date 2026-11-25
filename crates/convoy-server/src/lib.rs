@@ -8,6 +8,7 @@ pub mod server;
 pub mod token;
 pub mod traffic;
 pub mod weather;
+pub mod world;
 
 pub use admin::{handle_admin_command, AdminError, AdminResponse, BanEntry, BanlistManager};
 pub use client::{ClientSession, ClientState};

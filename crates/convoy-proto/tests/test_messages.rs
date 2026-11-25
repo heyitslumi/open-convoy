@@ -166,8 +166,7 @@ fn telemetry_roundtrips_position_velocity_and_quaternion() {
 fn clock_sync_matches_captured_packet() {
     let captured = hex("000007f7ff01000083507e1200000000");
     let msg = ClockSyncMsg {
-        client_id: 0,
-        vtime: 0x127e_5083,
+        micros: 0x127e_5083,
     };
     assert_eq!(msg.encode(), captured);
     assert_eq!(ClockSyncMsg::decode(&captured).unwrap(), msg);

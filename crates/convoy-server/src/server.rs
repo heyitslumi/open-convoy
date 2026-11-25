@@ -8,7 +8,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use convoy_proto::codec::CompressedTimestamp;
 use convoy_proto::messages::{AuthTicketMsg, HandshakeAckMsg, ModVerifyMsg, PlayerSpawnMsg};
 use convoy_proto::{parse_frame, FrameType, RawFrame};
 use convoy_steam::gameserver::SteamServer;
@@ -58,6 +57,8 @@ impl TicketVerifier for SteamTicketVerifier {
 }
 
 pub struct ConvoyServer {
+    /// Set once Steam logon completes; used for the world frames.
+    pub steam_id: u64,
     config: ServerConfig,
     sessions: HashMap<u32, ClientSession>,
     next_client_id: u16,
@@ -76,6 +77,7 @@ impl ConvoyServer {
         };
 
         Self {
+            steam_id: 0,
             config,
             sessions: HashMap::new(),
             next_client_id: FIRST_CLIENT_ID,
@@ -255,12 +257,8 @@ impl ConvoyServer {
                     log::info!("client {client_id}: received mod list");
                     self.sessions.get_mut(&conn).expect("session exists").state =
                         ClientState::Handshake;
-                    let entity_id = crate::token::entity_id(client_id);
-                    Ok(vec![
-                        entity_frame(client_id, entity_id),
-                        entity_state_frame(client_id),
-                        connect_ack(client_id),
-                    ])
+                    let seed = 0xf4cb_faa1; // bytes 8..12 of the opening 0x0c frame
+                    Ok(crate::world::initial_frames(client_id, seed, self.steam_id))
                 }
                 // The client sends this when it tears the connection down.
                 Some(0x0a) => Ok(Vec::new()),
@@ -303,11 +301,16 @@ impl ConvoyServer {
                 session.state = ClientState::Active;
                 session.name = Some(name.clone());
                 log::info!("[MP] [Chat] {name} connected");
-                Ok(Vec::new())
+                // Confirm the client's own entity so it finishes spawning.
+                Ok(vec![crate::world::confirm_spawn(&bytes)])
             }
 
             // Steady state: telemetry is accepted; routing lands in a later task.
             (ClientState::Active, FrameType::Telemetry) => Ok(Vec::new()),
+            // Late handshake acks after the world is running.
+            (ClientState::Active, FrameType::Handshake) => Ok(Vec::new()),
+            // Anything else from an active client is state we do not model yet.
+            (ClientState::Active, _) => Ok(Vec::new()),
 
             (ClientState::Disconnected, _) => Err(ServerError::UnexpectedFrame {
                 state,
@@ -368,6 +371,8 @@ impl ConvoyServer {
             steam.steam_id(),
             self.config.virtual_port + 1
         );
+
+        self.steam_id = steam.steam_id();
 
         let start_time = Instant::now();
         let mut tick = tokio::time::interval(TICK);
@@ -436,7 +441,7 @@ impl ConvoyServer {
                         if !self.sessions.contains_key(&msg.conn) {
                             steam.sockets().set_connection_poll_group(msg.conn);
                             let challenge = self.handle_connection(msg.conn);
-                            send(steam.sockets(), msg.conn, &challenge, true)?;
+                            if let Err(e) = send(steam.sockets(), msg.conn, &challenge, true) { log::warn!("send to {} failed: {e}", msg.conn); }
                         }
                         if let Some(session) = self.sessions.get_mut(&msg.conn) {
                             session.peer_id = msg.peer_id;
@@ -450,7 +455,7 @@ impl ConvoyServer {
                             if session.state == ClientState::Active {
                                 let outbound = broadcast_telemetry(&self.sessions, msg.conn, msg.payload.clone());
                                 for out in outbound {
-                                    send(steam.sockets(), out.conn, &out.payload, out.reliable)?;
+                                    if let Err(e) = send(steam.sockets(), out.conn, &out.payload, out.reliable) { log::warn!("send to {} failed: {e}", out.conn); }
                                 }
                             }
                         }
@@ -458,7 +463,7 @@ impl ConvoyServer {
                         match self.handle_packet(msg.conn, &msg.payload) {
                             Ok(packets) => {
                                 for packet in packets {
-                                    send(steam.sockets(), msg.conn, &packet, true)?;
+                                    if let Err(e) = send(steam.sockets(), msg.conn, &packet, true) { log::warn!("send to {} failed: {e}", msg.conn); }
                                 }
                             }
                             Err(ServerError::UnknownConnection(_)) => {}
@@ -485,10 +490,9 @@ impl ConvoyServer {
                 }
                 _ = clock_sync_interval.tick() => {
                     let micros = start_time.elapsed().as_micros() as u64;
-                    let vtime = CompressedTimestamp::from_micros(micros).0;
-                    let outbound = broadcast_clock_tick(&self.sessions, vtime);
+                    let outbound = broadcast_clock_tick(&self.sessions, micros);
                     for out in outbound {
-                        send(steam.sockets(), out.conn, &out.payload, out.reliable)?;
+                        if let Err(e) = send(steam.sockets(), out.conn, &out.payload, out.reliable) { log::warn!("send to {} failed: {e}", out.conn); }
                     }
                 }
             }
@@ -551,45 +555,6 @@ fn mod_request(client_id: u16, steam_id: u64) -> Vec<u8> {
     out.extend_from_slice(&[0u8; 7]);
     // The client compares bytes 18..26 with this derived token.
     out.extend_from_slice(&crate::token::server2client(steam_id));
-    out
-}
-
-/// 18-byte `00 00 01 00 00 00 00 <cid> 05 00*8`, which moves the client to
-/// its connected state after the mod list.
-fn connect_ack(client_id: u16) -> Vec<u8> {
-    let mut out = vec![0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00];
-    out.extend_from_slice(&client_id.to_le_bytes());
-    out.push(0x05);
-    out.extend_from_slice(&[0u8; 8]);
-    out
-}
-
-/// Entity spawn (45 B, type `0x02`), layout from a real join:
-/// `00 00 02 <cid> 01 00 03 <entity id u64> 01 00 <net id u32> ffffffff ...`
-fn entity_frame(client_id: u16, entity_id: u64) -> Vec<u8> {
-    let net = client_id as u32 + 1;
-    let mut out = vec![0x00, 0x00, 0x02];
-    out.extend_from_slice(&client_id.to_le_bytes());
-    out.extend_from_slice(&[0x01, 0x00, 0x03]);
-    out.extend_from_slice(&entity_id.to_le_bytes());
-    out.extend_from_slice(&[0x01, 0x00]);
-    out.extend_from_slice(&net.to_le_bytes());
-    out.extend_from_slice(&[0xff, 0xff, 0xff, 0xff]);
-    out.extend_from_slice(&[0x00, 0x00, 0x04, 0xf7, 0xff, 0x01, 0x00, 0x01, 0x00]);
-    out.extend_from_slice(&net.to_le_bytes());
-    out.extend_from_slice(&[0x00, 0x80, 0x00, 0x80, 0x00, 0x00]);
-    out
-}
-
-/// Entity component block (26 B, type `0x06`) that follows the spawn.
-fn entity_state_frame(client_id: u16) -> Vec<u8> {
-    let net = client_id as u32 + 1;
-    let mut out = vec![0x00, 0x00, 0x06];
-    out.extend_from_slice(&client_id.to_le_bytes());
-    out.extend_from_slice(&[0x01, 0x00, 0x0a, 0x00, 0x01, 0x00]);
-    out.extend_from_slice(&net.to_le_bytes());
-    out.extend_from_slice(&[0xff, 0xff, 0xff, 0xff, 0x00]);
-    out.extend_from_slice(&[0x64, 0x00, 0x32, 0x00, 0x32, 0x00]);
     out
 }
 

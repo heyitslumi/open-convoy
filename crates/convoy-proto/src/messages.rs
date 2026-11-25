@@ -318,14 +318,14 @@ impl VehicleTelemetryMsg {
 
 /// Server clock tick (type `0x07`), 16 bytes.
 ///
-/// `00 00 07 f7 ff 01 <client_id u16 LE> <vtime u32 LE> 00 00 00 00`
+/// `00 00 07 f7 ff 01 00 00 <micros u64 LE>`
 ///
-/// `vtime` is a [`crate::codec::CompressedTimestamp`] tick, i.e. microseconds
-/// shifted right by 6 (64 µs resolution).
+/// The client checks that the `u16` at bytes 5..7 equals 1 (sender = server)
+/// and reads the raw microsecond clock from bytes 8..16. Any other sender value
+/// is logged as a suspicious message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ClockSyncMsg {
-    pub client_id: u16,
-    pub vtime: u32,
+    pub micros: u64,
 }
 
 impl ClockSyncMsg {
@@ -333,10 +333,8 @@ impl ClockSyncMsg {
 
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(Self::LEN);
-        out.extend_from_slice(&[0x00, 0x00, 0x07, 0xf7, 0xff, 0x01]);
-        out.extend_from_slice(&self.client_id.to_le_bytes());
-        out.extend_from_slice(&self.vtime.to_le_bytes());
-        out.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
+        out.extend_from_slice(&[0x00, 0x00, 0x07, 0xf7, 0xff, 0x01, 0x00, 0x00]);
+        out.extend_from_slice(&self.micros.to_le_bytes());
         out
     }
 
@@ -344,11 +342,9 @@ impl ClockSyncMsg {
         if b.len() != Self::LEN {
             return Err(malformed());
         }
-        expect(b, 0, &[0x00, 0x00, 0x07, 0xf7, 0xff, 0x01])?;
-        expect(b, 12, &[0x00, 0x00, 0x00, 0x00])?;
+        expect(b, 0, &[0x00, 0x00, 0x07, 0xf7, 0xff, 0x01, 0x00, 0x00])?;
         Ok(Self {
-            client_id: u16_at(b, 6)?,
-            vtime: u32_at(b, 8)?,
+            micros: u64::from_le_bytes(b[8..16].try_into().expect("8 bytes")),
         })
     }
 }

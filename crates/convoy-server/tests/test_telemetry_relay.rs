@@ -155,8 +155,8 @@ fn clock_tick_broadcast_reaches_all_active_clients() {
     let cid_b = transition_to_active(&mut srv, conn_b, STEAM_ID_B, "DriverB");
     srv.handle_connection(conn_c); // non-active
 
-    let vtime = 123456u32;
-    let outbound = broadcast_clock_tick(srv.sessions(), vtime);
+    let micros = 123456u64;
+    let outbound = broadcast_clock_tick(srv.sessions(), micros);
 
     // Reaches all active clients (conn_a and conn_b), but not conn_c
     assert_eq!(outbound.len(), 2);
@@ -168,9 +168,6 @@ fn clock_tick_broadcast_reaches_all_active_clients() {
     for msg in outbound {
         assert!(msg.reliable);
         let decoded = ClockSyncMsg::decode(&msg.payload).unwrap();
-        assert_eq!(decoded.vtime, vtime);
-        // client_id in the msg matches recipient
-        let expected_cid = if msg.conn == conn_a { cid_a } else { cid_b };
-        assert_eq!(decoded.client_id, expected_cid);
+        assert_eq!(decoded.micros, micros);
     }
 }

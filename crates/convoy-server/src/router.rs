@@ -54,16 +54,13 @@ pub fn broadcast_telemetry(
 /// Each client receives a ClockSyncMsg tailored with its client_id and current `vtime`.
 pub fn broadcast_clock_tick(
     sessions: &HashMap<u32, ClientSession>,
-    vtime: u32,
+    micros: u64,
 ) -> Vec<OutboundMessage> {
     sessions
         .values()
         .filter(|s| s.state == ClientState::Active)
         .map(|s| {
-            let msg = ClockSyncMsg {
-                client_id: s.client_id,
-                vtime,
-            };
+            let msg = ClockSyncMsg { micros };
             OutboundMessage {
                 conn: s.conn,
                 payload: Bytes::from(msg.encode()),

@@ -67,8 +67,9 @@ fn handshake_walks_connecting_authenticating_handshake_active() {
     .encode();
     let out = srv.handle_packet(conn, &mod_verify).unwrap();
     assert_eq!(srv.session(conn).unwrap().state, ClientState::Handshake);
-    assert_eq!(out.len(), 3);
-    assert_eq!(out[2], hex("000001000000000a00050000000000000000"));
+    // World burst: server singletons first, connect ack last.
+    assert_eq!(out.last().unwrap(), &hex("000001000000000a00050000000000000000"));
+    assert!(out.iter().any(|f| f.len() == 45 && f[8..16] == [0x7f, 0x13, 0x4d, 0x27, 0xd4, 0xe8, 0x14, 0x00]));
 
     // Final `0x01`/`0x06` ack is accepted but does not spawn the player.
     let ack = HandshakeAckMsg { client_id: 10 }.encode();
@@ -83,7 +84,10 @@ fn handshake_walks_connecting_authenticating_handshake_active() {
         pos: (1.0, 2.0),
     }
     .encode();
-    assert!(srv.handle_packet(conn, &spawn).unwrap().is_empty());
+    let out = srv.handle_packet(conn, &spawn).unwrap();
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0].len(), 26);
+    assert_eq!(&out[0][..3], &[0, 0, 2]);
     let session = srv.session(conn).unwrap();
     assert_eq!(session.state, ClientState::Active);
     assert_eq!(session.name.as_deref(), Some("Roadrunner"));
@@ -209,6 +213,7 @@ fn mod_list_is_answered_with_an_entity_frame_and_the_connect_ack() {
     let stock = hex("00000100000a000a00020000000000000000bd090000b46dffff0566c7300000000000");
     let out = srv.handle_packet(1, &stock).unwrap();
     assert_eq!(srv.session(1).unwrap().state, ClientState::Handshake);
-    assert_eq!(out.len(), 3);
-    assert_eq!(out[2], hex("000001000000000a00050000000000000000"));
+    // World burst: server singletons first, connect ack last.
+    assert_eq!(out.last().unwrap(), &hex("000001000000000a00050000000000000000"));
+    assert!(out.iter().any(|f| f.len() == 45 && f[8..16] == [0x7f, 0x13, 0x4d, 0x27, 0xd4, 0xe8, 0x14, 0x00]));
 }
