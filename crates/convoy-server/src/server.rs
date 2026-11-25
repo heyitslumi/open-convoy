@@ -331,8 +331,8 @@ impl ConvoyServer {
                 session.spawn = Some(bytes.clone());
                 log::info!("[MP] [Chat] {} connected", name.as_deref().unwrap_or("player"));
 
-                // Remote-player frames are still rejected by the client (type 1
-                // with a server-authored create), so they are not broadcast yet.
+                // Existing players learn about this one from the relayed create
+                // the client sent; synthesising one is rejected as "type 1".
                 let _ = others;
                 // Confirm the client's own entity so it finishes spawning.
                 Ok(vec![crate::world::confirm_spawn(&bytes)])

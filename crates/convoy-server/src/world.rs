@@ -131,10 +131,16 @@ pub fn confirm_spawn(request: &[u8]) -> Vec<u8> {
 
 /// Server-authored create for another player, sent to one viewer.
 ///
-/// Layout copied from a capture (67 B): dest = viewer cid, sender = server,
+/// Byte-for-byte layout of a 67-byte capture: dest = viewer, sender = server,
 /// op `0x03`, class token `player_info`, mp_id = (player, 1), then an embedded
-/// `0x04` state block. A 26-byte create is rejected as truncated.
+/// `0x04` block whose sender is the server and whose tail carries the player's
+/// initial state.
 pub fn remote_player(viewer: u16, player: u16) -> Vec<u8> {
+    // Tail from the capture; player-specific state we do not model yet.
+    const TAIL: [u8; 22] = [
+        0xdd, 0x27, 0x44, 0x47, 0xf3, 0x5f, 0x64, 0xc7, 0x0a, 0x69, 0x75, 0x6c, 0x79, 0x61,
+        0x6e, 0x6f, 0x61, 0x62, 0x63, 0x63, 0x00, 0x2a,
+    ];
     let mut out = vec![0x00, 0x00, 0x02];
     out.extend_from_slice(&viewer.to_le_bytes());
     out.extend_from_slice(&[0x01, 0x00, 0x03]);
@@ -142,12 +148,12 @@ pub fn remote_player(viewer: u16, player: u16) -> Vec<u8> {
     out.extend_from_slice(&player.to_le_bytes());
     out.extend_from_slice(&1u32.to_le_bytes());
     out.extend_from_slice(&[0xff, 0xff, 0xff, 0xff]);
-    out.extend_from_slice(&[0x00, 0x00, 0x04, 0xf7, 0xff, 0x01, 0x00]);
+    out.extend_from_slice(&[0x00, 0x00, 0x04, 0xf7, 0xff]);
+    out.extend_from_slice(&[0x01, 0x00]);
     out.extend_from_slice(&player.to_le_bytes());
     out.extend_from_slice(&1u32.to_le_bytes());
     out.extend_from_slice(&[0x00, 0x80, 0x00, 0x80, 0x00, 0x00]);
-    // State tail observed after the block; length must stay >= 44 bytes.
-    out.extend_from_slice(&[0xdd, 0x27, 0x44, 0x47, 0xf3, 0x00, 0x00, 0x00]);
+    out.extend_from_slice(&TAIL);
     out
 }
 
@@ -171,9 +177,10 @@ mod tests {
     #[test]
     fn remote_player_frame_is_long_enough_and_addressed() {
         let f = remote_player(10, 11);
-        assert!(f.len() >= 44, "client rejects creates shorter than 44 bytes");
+        assert_eq!(f.len(), 67, "capture-exact create length");
         assert_eq!(&f[3..5], &10u16.to_le_bytes());
-        assert_eq!(&f[5..8], &[0x01, 0x00, 0x03]);
+        assert_eq!(&f[5..7], &[0x01, 0x00]);
+        assert_eq!(f[7], 0x03);
         assert_eq!(&f[8..16], &class::PLAYER_INFO.to_le_bytes());
         assert_eq!(&f[16..18], &11u16.to_le_bytes());
     }
