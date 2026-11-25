@@ -127,6 +127,19 @@ pub fn confirm_spawn(request: &[u8]) -> Vec<u8> {
     out
 }
 
+
+/// Announce a player's entity to the other clients.
+///
+/// Same ids as the client's own create frame, sent as op `0x03` (initial
+/// snapshot create) from the server to everyone.
+pub fn announce_player(request: &[u8]) -> Vec<u8> {
+    let body = request.get(8..22).unwrap_or(&[0u8; 14]);
+    let mut out = vec![0x00, 0x00, 0x02, 0xf7, 0xff, 0x01, 0x00, 0x03];
+    out.extend_from_slice(body);
+    out.extend_from_slice(&[0xff, 0xff, 0xff, 0xff]);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -141,6 +154,20 @@ mod tests {
             .expect("mp_economy spawn");
         let ack = frames.len() - 1;
         assert!(economy < ack);
+    }
+
+    #[test]
+    fn announce_carries_the_same_entity_to_others() {
+        let request = {
+            let mut f = vec![0x00, 0x00, 0x02, 0xf7, 0xff, 0x0a, 0x00, 0x00];
+            f.extend_from_slice(&class::PLAYER_GEN.to_le_bytes());
+            f.extend_from_slice(&[0x0a, 0x00, 0x01, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff]);
+            f
+        };
+        let announced = announce_player(&request);
+        assert_eq!(announced.len(), 26);
+        assert_eq!(&announced[3..8], &[0xf7, 0xff, 0x01, 0x00, 0x03]);
+        assert_eq!(&announced[8..22], &request[8..22]);
     }
 
     #[test]

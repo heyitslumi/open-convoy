@@ -66,6 +66,8 @@ pub struct ConvoyServer {
     banlist: BanlistManager,
     weather: WeatherManager,
     world_clock: (u8, u8),
+    /// Frames to fan out to every active client except the excluded one.
+    pub(crate) pending: Vec<(Option<u32>, Vec<u8>)>,
 }
 
 impl ConvoyServer {
@@ -85,6 +87,7 @@ impl ConvoyServer {
             banlist,
             weather: WeatherManager::new(),
             world_clock: (12, 0),
+            pending: Vec::new(),
         }
     }
 
@@ -258,7 +261,16 @@ impl ConvoyServer {
                     self.sessions.get_mut(&conn).expect("session exists").state =
                         ClientState::Handshake;
                     let seed = 0xf4cb_faa1; // bytes 8..12 of the opening 0x0c frame
-                    Ok(crate::world::initial_frames(client_id, seed, self.steam_id))
+                    let mut out = crate::world::initial_frames(client_id, seed, self.steam_id);
+                    // Players already in the session, so they exist on arrival.
+                    for (c, s) in self.sessions.iter() {
+                        if *c != conn && s.state == ClientState::Active {
+                            if let Some(spawn) = &s.spawn {
+                                out.push(crate::world::announce_player(spawn));
+                            }
+                        }
+                    }
+                    Ok(out)
                 }
                 // The client sends this when it tears the connection down.
                 Some(0x0a) => Ok(Vec::new()),
@@ -297,10 +309,23 @@ impl ConvoyServer {
                     });
                 }
                 let name = msg.player_name;
+                let others: Vec<u32> = self
+                    .sessions
+                    .iter()
+                    .filter(|(c, s)| **c != conn && s.state == ClientState::Active)
+                    .map(|(c, _)| *c)
+                    .collect();
                 let session = self.sessions.get_mut(&conn).expect("session exists");
                 session.state = ClientState::Active;
                 session.name = Some(name.clone());
+                session.spawn = Some(bytes.clone());
                 log::info!("[MP] [Chat] {name} connected");
+
+                // Announce the new truck to everyone already in the session.
+                let announce = crate::world::announce_player(&bytes);
+                for other in others {
+                    self.pending.push((Some(other), announce.clone()));
+                }
                 // Confirm the client's own entity so it finishes spawning.
                 Ok(vec![crate::world::confirm_spawn(&bytes)])
             }
@@ -475,6 +500,22 @@ impl ConvoyServer {
                                         steam.end_auth_session(steam_id);
                                     }
                                 }
+                            }
+                        }
+                    }
+
+                    for (exclude, frame) in std::mem::take(&mut self.pending) {
+                        let targets: Vec<u32> = self
+                            .sessions
+                            .iter()
+                            .filter(|(c, s)| {
+                                s.state == ClientState::Active && Some(**c) != exclude
+                            })
+                            .map(|(c, _)| *c)
+                            .collect();
+                        for target in targets {
+                            if let Err(e) = send(steam.sockets(), target, &frame, true) {
+                                log::warn!("broadcast to {target} failed: {e}");
                             }
                         }
                     }

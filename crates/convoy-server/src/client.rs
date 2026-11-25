@@ -27,6 +27,8 @@ pub struct ClientSession {
     pub steam_id: Option<u64>,
     pub name: Option<String>,
     pub state: ClientState,
+    /// Raw `0x02` create frame the client sent for its own entity.
+    pub spawn: Option<Vec<u8>>,
     pub last_seen: Instant,
 }
 
@@ -39,6 +41,7 @@ impl ClientSession {
             peer_id: None,
             name: None,
             state: ClientState::Connecting,
+            spawn: None,
             last_seen: Instant::now(),
         }
     }
