@@ -17,6 +17,7 @@ pub mod class {
     pub const MP_ECONOMY: u64 = 0x0014_e8d4_274d_137f;
     pub const PLAYER_GEN: u64 = 0x000e_5380_bb17_4da2;
     pub const MP_CHAT: u64 = 0x0000_0015_3e35_11df;
+    pub const PLAYER_INFO: u64 = 0x0237_6334_5f54_45a2;
 }
 
 /// `mp_id` of a server-owned singleton: owner `1`, then the network id.
@@ -128,18 +129,29 @@ pub fn confirm_spawn(request: &[u8]) -> Vec<u8> {
 }
 
 
-/// Announce a player's entity to the other clients.
+/// Server-authored create for another player, sent to one viewer.
 ///
-/// Same ids as the client's own create frame, sent as op `0x03` (initial
-/// snapshot create) from the server to everyone.
-pub fn announce_player(request: &[u8]) -> Vec<u8> {
-    let body = request.get(8..22).unwrap_or(&[0u8; 14]);
-    let mut out = vec![0x00, 0x00, 0x02, 0xf7, 0xff, 0x01, 0x00, 0x03];
-    out.extend_from_slice(body);
+/// Layout copied from a capture (67 B): dest = viewer cid, sender = server,
+/// op `0x03`, class token `player_info`, mp_id = (player, 1), then an embedded
+/// `0x04` state block. A 26-byte create is rejected as truncated.
+pub fn remote_player(viewer: u16, player: u16) -> Vec<u8> {
+    let mut out = vec![0x00, 0x00, 0x02];
+    out.extend_from_slice(&viewer.to_le_bytes());
+    out.extend_from_slice(&[0x01, 0x00, 0x03]);
+    out.extend_from_slice(&class::PLAYER_INFO.to_le_bytes());
+    out.extend_from_slice(&player.to_le_bytes());
+    out.extend_from_slice(&1u32.to_le_bytes());
     out.extend_from_slice(&[0xff, 0xff, 0xff, 0xff]);
+    out.extend_from_slice(&[0x00, 0x00, 0x04, 0xf7, 0xff, 0x01, 0x00]);
+    out.extend_from_slice(&player.to_le_bytes());
+    out.extend_from_slice(&1u32.to_le_bytes());
+    out.extend_from_slice(&[0x00, 0x80, 0x00, 0x80, 0x00, 0x00]);
+    // State tail observed after the block; length must stay >= 44 bytes.
+    out.extend_from_slice(&[0xdd, 0x27, 0x44, 0x47, 0xf3, 0x00, 0x00, 0x00]);
     out
 }
 
+/// Keepalive the client expects while idle (subtype `0x14`).
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -157,17 +169,13 @@ mod tests {
     }
 
     #[test]
-    fn announce_carries_the_same_entity_to_others() {
-        let request = {
-            let mut f = vec![0x00, 0x00, 0x02, 0xf7, 0xff, 0x0a, 0x00, 0x00];
-            f.extend_from_slice(&class::PLAYER_GEN.to_le_bytes());
-            f.extend_from_slice(&[0x0a, 0x00, 0x01, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff]);
-            f
-        };
-        let announced = announce_player(&request);
-        assert_eq!(announced.len(), 26);
-        assert_eq!(&announced[3..8], &[0xf7, 0xff, 0x01, 0x00, 0x03]);
-        assert_eq!(&announced[8..22], &request[8..22]);
+    fn remote_player_frame_is_long_enough_and_addressed() {
+        let f = remote_player(10, 11);
+        assert!(f.len() >= 44, "client rejects creates shorter than 44 bytes");
+        assert_eq!(&f[3..5], &10u16.to_le_bytes());
+        assert_eq!(&f[5..8], &[0x01, 0x00, 0x03]);
+        assert_eq!(&f[8..16], &class::PLAYER_INFO.to_le_bytes());
+        assert_eq!(&f[16..18], &11u16.to_le_bytes());
     }
 
     #[test]

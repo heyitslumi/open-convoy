@@ -129,16 +129,20 @@ class Bot:
         frame[7:9] = struct.pack("<H", self.cid)
         return bytes(frame)
 
+    # 61-byte player_info create captured from a real client (cid 0x4a).
+    SPAWN = bytearray.fromhex(
+        "000002f7ff4a0000a245545f346337024a0001000000ffffffff000004f7ff4a004a00"
+        "0100000000800080000084c21b45504c12c7044c756d69000900"
+    )
+
     def _player_spawn(self):
-        cid = self.cid
-        return (
-            b"\x00\x00\x02\xf7\xff"
-            + struct.pack("<H", cid)
-            + b"\x00"
-            + PLAYER_INFO_TOKEN
-            + struct.pack("<HI", cid, 1)
-            + b"\xff\xff\xff\xff"
-        )
+        frame = bytearray(self.SPAWN)
+        for off in (5, 16, 31, 33):
+            frame[off:off + 2] = struct.pack("<H", self.cid)
+        name = self.name.encode()[:4].ljust(4, b"\0")
+        frame[53] = 4
+        frame[54:58] = name
+        return bytes(frame)
 
     def _ack(self):
         cid = self.cid

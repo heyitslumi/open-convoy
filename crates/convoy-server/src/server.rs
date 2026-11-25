@@ -81,8 +81,8 @@ pub struct ConvoyServer {
     banlist: BanlistManager,
     weather: WeatherManager,
     world_clock: (u8, u8),
-    /// Frames to fan out to every active client except the excluded one.
-    pub(crate) pending: Vec<(Option<u32>, Vec<u8>)>,
+    /// Frames queued for one specific connection.
+    pub(crate) pending: Vec<(u32, Vec<u8>)>,
 }
 
 impl ConvoyServer {
@@ -331,11 +331,9 @@ impl ConvoyServer {
                 session.spawn = Some(bytes.clone());
                 log::info!("[MP] [Chat] {} connected", name.as_deref().unwrap_or("player"));
 
-                // Announce the new truck to everyone already in the session.
-                let announce = crate::world::announce_player(&bytes);
-                for other in others {
-                    self.pending.push((Some(other), announce.clone()));
-                }
+                // Remote-player frames are still rejected by the client (type 1
+                // with a server-authored create), so they are not broadcast yet.
+                let _ = others;
                 // Confirm the client's own entity so it finishes spawning.
                 Ok(vec![crate::world::confirm_spawn(&bytes)])
             }
@@ -475,6 +473,25 @@ impl ConvoyServer {
                     for msg in steam.sockets().poll_incoming() {
                         if queries.contains(&msg.conn) { continue; }
                         log::info!("inbound {} | {}", msg.conn, hex(&msg.payload));
+                        // Relay world traffic from active clients verbatim; the
+                        // client expects another player's create exactly as that
+                        // player sent it.
+                        let relay = self
+                            .sessions
+                            .get(&msg.conn)
+                            .is_some_and(|s| s.state == ClientState::Active)
+                            && matches!(msg.payload.get(2), Some(0x02) | Some(0x04) | Some(0x06));
+                        if relay {
+                            let targets: Vec<u32> = self
+                                .sessions
+                                .iter()
+                                .filter(|(c, s)| **c != msg.conn && s.state == ClientState::Active)
+                                .map(|(c, _)| *c)
+                                .collect();
+                            for target in targets {
+                                self.pending.push((target, msg.payload.to_vec()));
+                            }
+                        }
                         if !self.sessions.contains_key(&msg.conn) {
                             steam.sockets().set_connection_poll_group(msg.conn);
                             let challenge = self.handle_connection(msg.conn);
@@ -516,19 +533,9 @@ impl ConvoyServer {
                         }
                     }
 
-                    for (exclude, frame) in std::mem::take(&mut self.pending) {
-                        let targets: Vec<u32> = self
-                            .sessions
-                            .iter()
-                            .filter(|(c, s)| {
-                                s.state == ClientState::Active && Some(**c) != exclude
-                            })
-                            .map(|(c, _)| *c)
-                            .collect();
-                        for target in targets {
-                            if let Err(e) = send(steam.sockets(), target, &frame, true) {
-                                log::warn!("broadcast to {target} failed: {e}");
-                            }
+                    for (target, frame) in std::mem::take(&mut self.pending) {
+                        if let Err(e) = send(steam.sockets(), target, &frame, true) {
+                            log::warn!("send to {target} failed: {e}");
                         }
                     }
 
