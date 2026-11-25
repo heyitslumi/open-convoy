@@ -252,19 +252,13 @@ impl ConvoyServer {
             (ClientState::Authenticating, FrameType::Handshake) => match bytes.get(9) {
                 Some(0x02) => {
                     ModVerifyMsg::decode(&bytes)?;
-                    log::info!("client {client_id}: received mod verification");
+                    log::info!("client {client_id}: received mod list");
                     self.sessions.get_mut(&conn).expect("session exists").state =
                         ClientState::Handshake;
-                    Ok(vec![mod_check_ack(client_id)])
+                    Ok(vec![connect_ack(client_id)])
                 }
-                // The stock client answers the mod request with this subtype;
-                // its layout is not decoded yet, so log it verbatim.
-                Some(0x0a) => {
-                    log::info!("client {client_id}: inbound 0x0a frame {}", hex(bytes.as_slice()));
-                    self.sessions.get_mut(&conn).expect("session exists").state =
-                        ClientState::Handshake;
-                    Ok(vec![entity_frame(client_id)])
-                }
+                // The client sends this when it tears the connection down.
+                Some(0x0a) => Ok(Vec::new()),
                 other => Err(ServerError::UnexpectedSubtype {
                     got: other.copied(),
                 }),
@@ -283,6 +277,8 @@ impl ConvoyServer {
                     log::debug!("client {client_id} completed handshake");
                     Ok(Vec::new())
                 }
+                // Disconnect notice, same as during authentication.
+                Some(0x0a) => Ok(Vec::new()),
                 other => Err(ServerError::UnexpectedSubtype {
                     got: other.copied(),
                 }),
@@ -406,7 +402,7 @@ impl ConvoyServer {
                                 let client_id = self.session(conn).map_or(0, |s| s.client_id);
                                 let opening = std::iter::once(challenge)
                                     .chain(setup_frames(client_id))
-                                    .chain(std::iter::once(mod_request(client_id)));
+                                    .chain(std::iter::once(mod_request(client_id, cur_sid)));
                                 for packet in opening {
                                     if let Err(e) = send(steam.sockets(), conn, &packet, true) {
                                         log::warn!("failed to send opening packet to {conn}: {e}");
@@ -538,7 +534,7 @@ fn setup_frames(client_id: u16) -> Vec<Vec<u8>> {
 /// Mod request sent with the challenge, matching the official server's order.
 ///
 /// `00 00 01 <cid> 00 00 <cid> 01 4b 00*7 <8-byte session token>`
-fn mod_request(client_id: u16) -> Vec<u8> {
+fn mod_request(client_id: u16, steam_id: u64) -> Vec<u8> {
     let mut out = vec![0x00, 0x00, 0x01];
     out.extend_from_slice(&client_id.to_le_bytes());
     out.extend_from_slice(&[0x00, 0x00]);
@@ -548,17 +544,9 @@ fn mod_request(client_id: u16) -> Vec<u8> {
     // 139-byte mod list, where 0x4b only produced an 18-byte stub.
     out.push(0x6a);
     out.extend_from_slice(&[0u8; 7]);
-    // Must match the token advertised in the session listing and via SetModDir;
-    // the client compares the two.
-    out.extend_from_slice(&0x70a6e0eaf6f6370fu64.to_le_bytes());
+    // The client compares bytes 18..26 with this derived token.
+    out.extend_from_slice(&crate::token::server2client(steam_id));
     out
-}
-
-fn session_token() -> [u8; 8] {
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_nanos() as u64);
-    (nanos ^ (std::process::id() as u64) << 32).to_le_bytes()
 }
 
 /// Step 3 reply: `00 00 01 01 00 00 00 <cid> 00 04`.
@@ -566,6 +554,16 @@ fn mod_check_ack(client_id: u16) -> Vec<u8> {
     let mut out = vec![0x00, 0x00, 0x01, 0x01, 0x00, 0x00, 0x00];
     out.extend_from_slice(&client_id.to_le_bytes());
     out.extend_from_slice(&[0x00, 0x04]);
+    out
+}
+
+/// 18-byte `00 00 01 00 00 00 00 <cid> 05 00*8`, which moves the client to
+/// its connected state after the mod list.
+fn connect_ack(client_id: u16) -> Vec<u8> {
+    let mut out = vec![0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00];
+    out.extend_from_slice(&client_id.to_le_bytes());
+    out.push(0x05);
+    out.extend_from_slice(&[0u8; 8]);
     out
 }
 
@@ -581,20 +579,6 @@ fn entity_frame(client_id: u16) -> Vec<u8> {
     out.extend_from_slice(&[0xff, 0xff, 0xff, 0xff]);
     out.extend_from_slice(&[0x00, 0x00, 0x04, 0xf7, 0xff, 0x01, 0x00, 0x01, 0x00]);
     out.extend_from_slice(&[0x0b, 0x00, 0x00, 0x00, 0x00, 0x80, 0x00, 0x80, 0x00, 0x00]);
-    out
-}
-
-/// Reply to the client's mod-list frame: the client's own 8-byte token echoed
-/// at offsets 18 and 30, as the official server does with its mod hash.
-fn mod_list_ack(client_id: u16, token: [u8; 8]) -> Vec<u8> {
-    let mut out = vec![0x00, 0x00, 0x01, 0x01, 0x00, 0x00, 0x00];
-    out.extend_from_slice(&client_id.to_le_bytes());
-    out.push(0x04);
-    out.extend_from_slice(&[0u8; 8]);
-    for _ in 0..2 {
-        out.extend_from_slice(&token);
-        out.extend_from_slice(&[0x05, 0x18, 0xe8, 0xf7]);
-    }
     out
 }
 
@@ -647,10 +631,10 @@ mod opening_tests {
 
     #[test]
     fn mod_request_matches_the_official_layout() {
-        let frame = mod_request(10);
+        let frame = mod_request(10, 85_568_392_937_043_937);
         assert_eq!(frame.len(), 26);
         assert_eq!(&frame[..11], &[0, 0, 1, 10, 0, 0, 0, 10, 0, 1, 0x6a]);
         assert_eq!(&frame[11..18], &[0; 7]);
-        assert_eq!(&frame[18..], &0x70a6e0eaf6f6370fu64.to_le_bytes());
+        assert_eq!(&frame[18..], &crate::token::server2client(85_568_392_937_043_937));
     }
 }

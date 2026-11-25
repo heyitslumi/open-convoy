@@ -113,6 +113,30 @@ waits for after the mod exchange rather than what it rejects.
 The hook also crashed the client twice while reading the compared values, so
 that instrumentation needs a fault guard before it is used again.
 
+## Solved: the mod-request token (2026-11-25)
+
+The gate rejects the **server's 26-byte mod request**, not any reply. Bytes
+18..26 must be:
+
+```
+CityHash64("server2client" || UPPER_HEX(SHA256(steam_id as u64 LE)))
+```
+
+`client2server` is the mirror image, carried by the client's mod list. Verified
+against a capture of a real join (SteamID `85568392937043937` gives
+`cd61c4c5b4fd5bc7` and `c6c14336b4789ded`); see `crates/convoy-server/src/token.rs`.
+
+With the correct token the client sends its 128-byte mod list instead of
+aborting, and no longer logs `suspicious message`.
+
+## Remaining: world state after the mod list
+
+The official server answers the mod list with a stream of entity frames: 45-byte
+`0x02` and 26/56/90-byte `0x06` messages for every entity in the session,
+followed by the 18-byte `0x01/0x05` connect ack. A single fabricated frame is
+not enough; the client closes with reason 9. Implementing entity replication is
+the next milestone.
+
 ## Next steps
 
 1. Determine what "type 30" refers to in the client. The message appears even

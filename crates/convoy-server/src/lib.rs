@@ -5,6 +5,7 @@ pub mod client;
 pub mod config;
 pub mod router;
 pub mod server;
+pub mod token;
 pub mod traffic;
 pub mod weather;
 

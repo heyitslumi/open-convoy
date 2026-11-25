@@ -67,8 +67,7 @@ fn handshake_walks_connecting_authenticating_handshake_active() {
     .encode();
     let out = srv.handle_packet(conn, &mod_verify).unwrap();
     assert_eq!(srv.session(conn).unwrap().state, ClientState::Handshake);
-    assert_eq!(out.len(), 1);
-    assert_eq!(out[0], hex("000001010000000a000004"));
+    assert_eq!(out, vec![hex("000001000000000a00050000000000000000")]);
 
     // Final `0x01`/`0x06` ack is accepted but does not spawn the player.
     let ack = HandshakeAckMsg { client_id: 10 }.encode();
@@ -202,15 +201,12 @@ fn stock_unassigned_ticket_header_still_requires_verification() {
 }
 
 #[test]
-fn stock_0x0a_reply_is_answered_with_the_captured_no_mod_ack() {
+fn mod_list_is_answered_with_an_entity_frame_and_the_connect_ack() {
     let mut srv = server();
     srv.handle_connection(1);
     srv.handle_packet(1, &hex("00000b0000ffffdeadbeef")).unwrap();
-    let stock = hex("0000010a0000000a000a00000000b4fd5bc7cd61c4c5");
+    let stock = hex("00000100000a000a00020000000000000000bd090000b46dffff0566c7300000000000");
     let out = srv.handle_packet(1, &stock).unwrap();
     assert_eq!(srv.session(1).unwrap().state, ClientState::Handshake);
-    // The client's own 8-byte token is echoed at 18 and 30 in a 42-byte reply.
-    // 45-byte entity message, as the official server sends after the mod step.
-    assert_eq!(out[0].len(), 45);
-    assert_eq!(&out[0][18..26], &[0x0b, 0, 0, 0, 0xff, 0xff, 0xff, 0xff]);
+    assert_eq!(out, vec![hex("000001000000000a00050000000000000000")]);
 }
