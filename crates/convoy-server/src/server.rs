@@ -301,14 +301,18 @@ impl ConvoyServer {
 
             // Step 4: player spawn -> Active.
             (ClientState::Handshake, FrameType::EntitySetup) => {
-                let msg = PlayerSpawnMsg::decode(&bytes)?;
-                if msg.client_id != client_id {
-                    return Err(ServerError::ClientIdMismatch {
-                        expected: client_id,
-                        got: msg.client_id,
+                // The stock client announces its entity with a 26-byte `0x02`
+                // create (class token + mp_id); older captures also carry a
+                // 73-byte form with the player name.
+                if bytes.len() < 22 {
+                    return Err(ServerError::UnexpectedFrame {
+                        state: ClientState::Handshake,
+                        ftype: FrameType::EntitySetup,
                     });
                 }
-                let name = msg.player_name;
+                let name = PlayerSpawnMsg::decode(&bytes)
+                    .ok()
+                    .map(|m| m.player_name);
                 let others: Vec<u32> = self
                     .sessions
                     .iter()
@@ -317,9 +321,9 @@ impl ConvoyServer {
                     .collect();
                 let session = self.sessions.get_mut(&conn).expect("session exists");
                 session.state = ClientState::Active;
-                session.name = Some(name.clone());
+                session.name = name.clone();
                 session.spawn = Some(bytes.clone());
-                log::info!("[MP] [Chat] {name} connected");
+                log::info!("[MP] [Chat] {} connected", name.as_deref().unwrap_or("player"));
 
                 // Announce the new truck to everyone already in the session.
                 let announce = crate::world::announce_player(&bytes);
