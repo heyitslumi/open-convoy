@@ -116,18 +116,35 @@ static void patch(void *obj) {
     fprintf(out, "patched vtable=%p\n", (void *)vt);
 }
 
-typedef bool (*init_fn)(void);
+// The game initialises Steam through whichever entry point its SDK version
+// uses, so wait for the sockets interface to become available instead of
+// assuming one init symbol.
+#include <pthread.h>
 
-bool SteamAPI_Init(void) {
-    static init_fn real;
-    if (!real) real = (init_fn)dlsym(RTLD_NEXT, "SteamAPI_Init");
-    bool ok = real ? real() : false;
-    if (!ok) return ok;
+static void *watch(void *ignored) {
+    (void)ignored;
+    for (int i = 0; i < 480; i++) {
+        void *api = api_handle();
+        if (api) {
+            typedef void *(*sockets_fn)(void);
+            sockets_fn sockets =
+                (sockets_fn)dlsym(api, "SteamAPI_SteamNetworkingSockets_SteamAPI_v012");
+            if (sockets) {
+                void *iface = sockets();
+                if (iface) {
+                    patch(iface);
+                    return NULL;
+                }
+            }
+        }
+        usleep(250 * 1000);
+    }
+    ensure();
+    if (out) fprintf(out, "patch: interface never appeared\n");
+    return NULL;
+}
 
-    void *api = api_handle();
-    typedef void *(*sockets_fn)(void);
-    static sockets_fn sockets;
-    if (!sockets) sockets = (sockets_fn)dlsym(api, "SteamAPI_SteamNetworkingSockets_SteamAPI_v012");
-    if (sockets) patch(sockets());
-    return ok;
+__attribute__((constructor)) static void start_watch(void) {
+    pthread_t t;
+    if (pthread_create(&t, NULL, watch, NULL) == 0) pthread_detach(t);
 }

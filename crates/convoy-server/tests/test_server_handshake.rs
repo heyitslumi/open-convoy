@@ -210,7 +210,7 @@ fn stock_0x0a_reply_is_answered_with_the_captured_no_mod_ack() {
     let out = srv.handle_packet(1, &stock).unwrap();
     assert_eq!(srv.session(1).unwrap().state, ClientState::Handshake);
     // The client's own 8-byte token is echoed at 18 and 30 in a 42-byte reply.
-    let token = stock[10..18].to_vec();
-    assert_eq!(out[0].len(), 42);
-    assert_eq!(&out[0][18..26], &token[..]);
+    // 45-byte entity message, as the official server sends after the mod step.
+    assert_eq!(out[0].len(), 45);
+    assert_eq!(&out[0][18..26], &[0x0b, 0, 0, 0, 0xff, 0xff, 0xff, 0xff]);
 }

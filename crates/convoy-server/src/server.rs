@@ -263,12 +263,7 @@ impl ConvoyServer {
                     log::info!("client {client_id}: inbound 0x0a frame {}", hex(bytes.as_slice()));
                     self.sessions.get_mut(&conn).expect("session exists").state =
                         ClientState::Handshake;
-                    // Echo the client's own 8-byte token back in the ack.
-                    let token: [u8; 8] = bytes
-                        .get(10..18)
-                        .and_then(|t| t.try_into().ok())
-                        .unwrap_or([0; 8]);
-                    Ok(vec![mod_list_ack(client_id, token)])
+                    Ok(vec![entity_frame(client_id)])
                 }
                 other => Err(ServerError::UnexpectedSubtype {
                     got: other.copied(),
@@ -531,12 +526,11 @@ fn challenge(client_id: u16) -> Vec<u8> {
 /// The three opaque setup frames the official server sends on connect.
 #[allow(unused_variables)]
 fn setup_frames(client_id: u16) -> Vec<Vec<u8>> {
-    // Broadcast form observed when a real client connects; the probe saw a
-    // directed variant (f7 ff 01 00 02) instead.
+    // Directed form, confirmed by a client-side capture of a real join.
     let frames = vec![
-        [&[0x00, 0x00, 0x0c, 0xf7, 0xff, 0xff, 0xff, 0x02][..], &[0xa1, 0xfa, 0xcb, 0xf4, 0, 0, 0, 0]].concat(),
-        [&[0x00, 0x00, 0x07, 0xf7, 0xff, 0xff, 0xff, 0x02][..], &[0x50, 0x6c, 0x2f, 0x00, 0, 0, 0, 0]].concat(),
-        [&[0x00, 0x00, 0x07, 0xf7, 0xff, 0xff, 0xff, 0x03][..], &[0x00, 0xd4, 0xa0, 0x64, 0x08, 0, 0, 0]].concat(),
+        [&[0x00, 0x00, 0x0c, 0xf7, 0xff, 0x01, 0x00, 0x02][..], &[0xa1, 0xfa, 0xcb, 0xf4, 0, 0, 0, 0]].concat(),
+        [&[0x00, 0x00, 0x07, 0xf7, 0xff, 0x01, 0x00, 0x02][..], &[0x50, 0x6c, 0x2f, 0x00, 0, 0, 0, 0]].concat(),
+        [&[0x00, 0x00, 0x07, 0xf7, 0xff, 0x01, 0x00, 0x03][..], &[0x00, 0xd4, 0xa0, 0x64, 0x08, 0, 0, 0]].concat(),
     ];
     frames
 }
@@ -550,9 +544,13 @@ fn mod_request(client_id: u16) -> Vec<u8> {
     out.extend_from_slice(&[0x00, 0x00]);
     out.extend_from_slice(&client_id.to_le_bytes());
     out.push(0x01);
-    out.extend_from_slice(&75u64.to_le_bytes());
-    // Opaque per-session token: the official server sends a different value each run.
-    out.extend_from_slice(&session_token());
+    // 0x6a in the reference capture; the client answers it with its full
+    // 139-byte mod list, where 0x4b only produced an 18-byte stub.
+    out.push(0x6a);
+    out.extend_from_slice(&[0u8; 7]);
+    // Must match the token advertised in the session listing and via SetModDir;
+    // the client compares the two.
+    out.extend_from_slice(&0x70a6e0eaf6f6370fu64.to_le_bytes());
     out
 }
 
@@ -568,6 +566,21 @@ fn mod_check_ack(client_id: u16) -> Vec<u8> {
     let mut out = vec![0x00, 0x00, 0x01, 0x01, 0x00, 0x00, 0x00];
     out.extend_from_slice(&client_id.to_le_bytes());
     out.extend_from_slice(&[0x00, 0x04]);
+    out
+}
+
+/// First entity message after the mod step, copied from a real join:
+/// `00 00 02 <cid> 01 00 03 <id> 01 00 0b 00 00 00 ff ff ff ff 00 00 04 f7 ...`
+fn entity_frame(client_id: u16) -> Vec<u8> {
+    let mut out = vec![0x00, 0x00, 0x02];
+    out.extend_from_slice(&client_id.to_le_bytes());
+    out.extend_from_slice(&[0x01, 0x00, 0x03]);
+    out.extend_from_slice(&[0xd7, 0x09, 0x0d, 0x2d, 0x43, 0xee, 0x07, 0x00]);
+    out.extend_from_slice(&[0x01, 0x00]);
+    out.extend_from_slice(&[0x0b, 0x00, 0x00, 0x00]);
+    out.extend_from_slice(&[0xff, 0xff, 0xff, 0xff]);
+    out.extend_from_slice(&[0x00, 0x00, 0x04, 0xf7, 0xff, 0x01, 0x00, 0x01, 0x00]);
+    out.extend_from_slice(&[0x0b, 0x00, 0x00, 0x00, 0x00, 0x80, 0x00, 0x80, 0x00, 0x00]);
     out
 }
 
@@ -636,8 +649,8 @@ mod opening_tests {
     fn mod_request_matches_the_official_layout() {
         let frame = mod_request(10);
         assert_eq!(frame.len(), 26);
-        assert_eq!(&frame[..11], &[0, 0, 1, 10, 0, 0, 0, 10, 0, 1, 75]);
+        assert_eq!(&frame[..11], &[0, 0, 1, 10, 0, 0, 0, 10, 0, 1, 0x6a]);
         assert_eq!(&frame[11..18], &[0; 7]);
-        assert_ne!(&frame[18..], &[0; 8]);
+        assert_eq!(&frame[18..], &0x70a6e0eaf6f6370fu64.to_le_bytes());
     }
 }
