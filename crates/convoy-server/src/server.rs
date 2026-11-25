@@ -255,7 +255,12 @@ impl ConvoyServer {
                     log::info!("client {client_id}: received mod list");
                     self.sessions.get_mut(&conn).expect("session exists").state =
                         ClientState::Handshake;
-                    Ok(vec![connect_ack(client_id)])
+                    let entity_id = crate::token::entity_id(client_id);
+                    Ok(vec![
+                        entity_frame(client_id, entity_id),
+                        entity_state_frame(client_id),
+                        connect_ack(client_id),
+                    ])
                 }
                 // The client sends this when it tears the connection down.
                 Some(0x0a) => Ok(Vec::new()),
@@ -549,14 +554,6 @@ fn mod_request(client_id: u16, steam_id: u64) -> Vec<u8> {
     out
 }
 
-/// Step 3 reply: `00 00 01 01 00 00 00 <cid> 00 04`.
-fn mod_check_ack(client_id: u16) -> Vec<u8> {
-    let mut out = vec![0x00, 0x00, 0x01, 0x01, 0x00, 0x00, 0x00];
-    out.extend_from_slice(&client_id.to_le_bytes());
-    out.extend_from_slice(&[0x00, 0x04]);
-    out
-}
-
 /// 18-byte `00 00 01 00 00 00 00 <cid> 05 00*8`, which moves the client to
 /// its connected state after the mod list.
 fn connect_ack(client_id: u16) -> Vec<u8> {
@@ -567,18 +564,32 @@ fn connect_ack(client_id: u16) -> Vec<u8> {
     out
 }
 
-/// First entity message after the mod step, copied from a real join:
-/// `00 00 02 <cid> 01 00 03 <id> 01 00 0b 00 00 00 ff ff ff ff 00 00 04 f7 ...`
-fn entity_frame(client_id: u16) -> Vec<u8> {
+/// Entity spawn (45 B, type `0x02`), layout from a real join:
+/// `00 00 02 <cid> 01 00 03 <entity id u64> 01 00 <net id u32> ffffffff ...`
+fn entity_frame(client_id: u16, entity_id: u64) -> Vec<u8> {
+    let net = client_id as u32 + 1;
     let mut out = vec![0x00, 0x00, 0x02];
     out.extend_from_slice(&client_id.to_le_bytes());
     out.extend_from_slice(&[0x01, 0x00, 0x03]);
-    out.extend_from_slice(&[0xd7, 0x09, 0x0d, 0x2d, 0x43, 0xee, 0x07, 0x00]);
+    out.extend_from_slice(&entity_id.to_le_bytes());
     out.extend_from_slice(&[0x01, 0x00]);
-    out.extend_from_slice(&[0x0b, 0x00, 0x00, 0x00]);
+    out.extend_from_slice(&net.to_le_bytes());
     out.extend_from_slice(&[0xff, 0xff, 0xff, 0xff]);
     out.extend_from_slice(&[0x00, 0x00, 0x04, 0xf7, 0xff, 0x01, 0x00, 0x01, 0x00]);
-    out.extend_from_slice(&[0x0b, 0x00, 0x00, 0x00, 0x00, 0x80, 0x00, 0x80, 0x00, 0x00]);
+    out.extend_from_slice(&net.to_le_bytes());
+    out.extend_from_slice(&[0x00, 0x80, 0x00, 0x80, 0x00, 0x00]);
+    out
+}
+
+/// Entity component block (26 B, type `0x06`) that follows the spawn.
+fn entity_state_frame(client_id: u16) -> Vec<u8> {
+    let net = client_id as u32 + 1;
+    let mut out = vec![0x00, 0x00, 0x06];
+    out.extend_from_slice(&client_id.to_le_bytes());
+    out.extend_from_slice(&[0x01, 0x00, 0x0a, 0x00, 0x01, 0x00]);
+    out.extend_from_slice(&net.to_le_bytes());
+    out.extend_from_slice(&[0xff, 0xff, 0xff, 0xff, 0x00]);
+    out.extend_from_slice(&[0x64, 0x00, 0x32, 0x00, 0x32, 0x00]);
     out
 }
 

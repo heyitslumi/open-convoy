@@ -203,6 +203,13 @@ pub fn client2server(steam_id: u64) -> [u8; 8] {
     salted("client2server", steam_id).to_le_bytes()
 }
 
+
+/// Entity id for a joining client. The official server uses opaque 64-bit ids;
+/// any value works as long as the session uses it consistently.
+pub fn entity_id(client_id: u16) -> u64 {
+    0x0a00_0000_0000_0000u64 | client_id as u64
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

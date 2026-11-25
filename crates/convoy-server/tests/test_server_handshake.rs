@@ -67,7 +67,8 @@ fn handshake_walks_connecting_authenticating_handshake_active() {
     .encode();
     let out = srv.handle_packet(conn, &mod_verify).unwrap();
     assert_eq!(srv.session(conn).unwrap().state, ClientState::Handshake);
-    assert_eq!(out, vec![hex("000001000000000a00050000000000000000")]);
+    assert_eq!(out.len(), 3);
+    assert_eq!(out[2], hex("000001000000000a00050000000000000000"));
 
     // Final `0x01`/`0x06` ack is accepted but does not spawn the player.
     let ack = HandshakeAckMsg { client_id: 10 }.encode();
@@ -208,5 +209,6 @@ fn mod_list_is_answered_with_an_entity_frame_and_the_connect_ack() {
     let stock = hex("00000100000a000a00020000000000000000bd090000b46dffff0566c7300000000000");
     let out = srv.handle_packet(1, &stock).unwrap();
     assert_eq!(srv.session(1).unwrap().state, ClientState::Handshake);
-    assert_eq!(out, vec![hex("000001000000000a00050000000000000000")]);
+    assert_eq!(out.len(), 3);
+    assert_eq!(out[2], hex("000001000000000a00050000000000000000"));
 }
