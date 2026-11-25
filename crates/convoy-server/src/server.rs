@@ -38,20 +38,35 @@ pub trait TicketVerifier: Send + Sync {
 /// Production verifier backed by the Steam GameServer FFI.
 pub struct SteamTicketVerifier {
     server: Arc<SteamServer>,
+    allow_unverified: bool,
 }
 
 impl SteamTicketVerifier {
     pub fn new(server: Arc<SteamServer>) -> Self {
-        Self { server }
+        Self {
+            server,
+            allow_unverified: false,
+        }
+    }
+
+    /// Testing aid: accept a peer whose Steam auth session cannot start, which
+    /// happens when the same account is already connected.
+    pub fn allowing_unverified(mut self) -> Self {
+        self.allow_unverified = true;
+        self
     }
 }
 
 impl TicketVerifier for SteamTicketVerifier {
     fn verify(&self, peer_id: Option<u64>, ticket: &[u8]) -> Result<u64, ServerError> {
         let steam_id = peer_id.filter(|id| *id != 0).ok_or(ServerError::AuthFailed)?;
-        self.server
-            .begin_auth_session(ticket, steam_id)
-            .map_err(|_| ServerError::AuthFailed)?;
+        match self.server.begin_auth_session(ticket, steam_id) {
+            Ok(()) => {}
+            Err(_) if self.allow_unverified => {
+                log::warn!("accepting unverified client {steam_id} (testing flag)");
+            }
+            Err(_) => return Err(ServerError::AuthFailed),
+        }
         Ok(steam_id)
     }
 }
@@ -261,16 +276,7 @@ impl ConvoyServer {
                     self.sessions.get_mut(&conn).expect("session exists").state =
                         ClientState::Handshake;
                     let seed = 0xf4cb_faa1; // bytes 8..12 of the opening 0x0c frame
-                    let mut out = crate::world::initial_frames(client_id, seed, self.steam_id);
-                    // Players already in the session, so they exist on arrival.
-                    for (c, s) in self.sessions.iter() {
-                        if *c != conn && s.state == ClientState::Active {
-                            if let Some(spawn) = &s.spawn {
-                                out.push(crate::world::announce_player(spawn));
-                            }
-                        }
-                    }
-                    Ok(out)
+                    Ok(crate::world::initial_frames(client_id, seed, self.steam_id))
                 }
                 // The client sends this when it tears the connection down.
                 Some(0x0a) => Ok(Vec::new()),
@@ -406,6 +412,8 @@ impl ConvoyServer {
         let start_time = Instant::now();
         let mut tick = tokio::time::interval(TICK);
         let mut clock_sync_interval = tokio::time::interval(Duration::from_millis(100));
+        // The client drops a session after ~15 s without one of these.
+        let mut keepalive_interval = tokio::time::interval(Duration::from_millis(2500));
         let mut last_logged_steamid = 0u64;
         let mut queries = std::collections::HashSet::new();
 
@@ -530,6 +538,16 @@ impl ConvoyServer {
                             if let Some(steam_id) = session.steam_id {
                                 steam.end_auth_session(steam_id);
                             }
+                        }
+                    }
+                }
+                _ = keepalive_interval.tick() => {
+                    for (conn, session) in self.sessions.iter() {
+                        if session.state != ClientState::Active {
+                            continue;
+                        }
+                        if let Err(e) = send(steam.sockets(), *conn, &crate::world::keepalive(), true) {
+                            log::warn!("keepalive to {conn} failed: {e}");
                         }
                     }
                 }

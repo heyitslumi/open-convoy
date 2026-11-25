@@ -12,6 +12,9 @@ pub struct ServerConfig {
     pub query_port: u16,
     pub virtual_port: u16,
     pub server_logon_token: Option<String>,
+    /// Accept clients whose Steam auth session cannot start (e.g. a second
+    /// connection from the same account). Testing only.
+    pub allow_unverified_clients: bool,
     pub game_version: String,
     pub map_name: String,
     pub map_dimensions: [i32; 4],
@@ -34,6 +37,7 @@ struct ServerSection {
     password: Option<String>,
     max_players: Option<u16>,
     server_logon_token: Option<String>,
+    allow_unverified_clients: Option<bool>,
     moderators: Option<Vec<u64>>,
     banlist_path: Option<String>,
 }
@@ -62,6 +66,7 @@ impl Default for ServerConfig {
             query_port: 27016,
             virtual_port: 100,
             server_logon_token: None,
+            allow_unverified_clients: false,
             game_version: "1.62s".into(),
             map_name: "/map/europe.mbd".into(),
             map_dimensions: [-24576000, -31744000, 20480000, 22528000],
@@ -86,6 +91,7 @@ impl ServerConfig {
                 if let Some(v) = srv.password { cfg.password = v; }
                 if let Some(v) = srv.max_players { cfg.max_players = v; }
                 if srv.server_logon_token.is_some() { cfg.server_logon_token = srv.server_logon_token; }
+                if let Some(v) = srv.allow_unverified_clients { cfg.allow_unverified_clients = v; }
                 if let Some(v) = srv.moderators { cfg.moderators = v; }
                 if srv.banlist_path.is_some() { cfg.banlist_path = srv.banlist_path; }
             }

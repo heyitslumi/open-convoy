@@ -35,7 +35,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         config.server_logon_token.as_deref(),
     )?);
 
-    let verifier = Box::new(SteamTicketVerifier::new(Arc::clone(&steam)));
+    let mut verifier = SteamTicketVerifier::new(Arc::clone(&steam));
+    if config.allow_unverified_clients {
+        verifier = verifier.allowing_unverified();
+    }
+    let verifier = Box::new(verifier);
     ConvoyServer::new(config, verifier).run(steam).await?;
     Ok(())
 }
